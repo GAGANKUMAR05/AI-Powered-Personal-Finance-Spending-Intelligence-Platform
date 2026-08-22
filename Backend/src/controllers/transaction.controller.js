@@ -1,5 +1,10 @@
+import mongoose from "mongoose";
+import transactionModel from "../models/transaction.model.js";
 
-import transactionModel from './../models/transaction.model.js';
+
+// ===============================
+// CREATE TRANSACTION
+// ===============================
 
 const createTransaction = async (req, res) => {
     try {
@@ -38,6 +43,12 @@ const createTransaction = async (req, res) => {
     }
 };
 
+
+// ===============================
+// GET ALL TRANSACTIONS
+// WITH FILTERING + PAGINATION
+// ===============================
+
 const getTransactions = async (req, res) => {
     try {
         const {
@@ -45,8 +56,14 @@ const getTransactions = async (req, res) => {
             category,
             paymentMethod,
             month,
-            year
+            year,
+            page = 1,
+            limit = 10
         } = req.query;
+
+        // -------------------------------
+        // Build filter
+        // -------------------------------
 
         const filter = {
             user: req.user.id
@@ -64,24 +81,121 @@ const getTransactions = async (req, res) => {
             filter.paymentMethod = paymentMethod;
         }
 
-        if (month && year) {
-            const startDate = new Date(year, month - 1, 1);
-            const endDate = new Date(year, month, 1);
+        // -------------------------------
+        // Filter by year
+        // -------------------------------
 
-            filter.date = {
-                $gte: startDate,
-                $lt: endDate
-            };
+        if (year) {
+            const yearNumber = Number(year);
+
+            if (Number.isNaN(yearNumber)) {
+                return res.status(400).json({
+                    message: "Invalid year"
+                });
+            }
+
+            if (month) {
+                const monthNumber = Number(month);
+
+                if (
+                    Number.isNaN(monthNumber) ||
+                    monthNumber < 1 ||
+                    monthNumber > 12
+                ) {
+                    return res.status(400).json({
+                        message: "Invalid month"
+                    });
+                }
+
+                const startDate = new Date(
+                    yearNumber,
+                    monthNumber - 1,
+                    1
+                );
+
+                const endDate = new Date(
+                    yearNumber,
+                    monthNumber,
+                    1
+                );
+
+                filter.date = {
+                    $gte: startDate,
+                    $lt: endDate
+                };
+
+            } else {
+                const startDate = new Date(
+                    yearNumber,
+                    0,
+                    1
+                );
+
+                const endDate = new Date(
+                    yearNumber + 1,
+                    0,
+                    1
+                );
+
+                filter.date = {
+                    $gte: startDate,
+                    $lt: endDate
+                };
+            }
         }
+
+        // -------------------------------
+        // Pagination
+        // -------------------------------
+
+        const pageNumber = Math.max(
+            parseInt(page) || 1,
+            1
+        );
+
+        const limitNumber = Math.min(
+            Math.max(parseInt(limit) || 10, 1),
+            50
+        );
+
+        const skip = (pageNumber - 1) * limitNumber;
+
+        // -------------------------------
+        // Fetch transactions
+        // -------------------------------
 
         const transactions = await transactionModel
             .find(filter)
-            .sort({ date: -1 });
+            .sort({ date: -1 })
+            .skip(skip)
+            .limit(limitNumber);
+
+        // -------------------------------
+        // Count total transactions
+        // -------------------------------
+
+        const totalTransactions =
+            await transactionModel.countDocuments(filter);
+
+        const totalPages = Math.ceil(
+            totalTransactions / limitNumber
+        );
+
+        // -------------------------------
+        // Response
+        // -------------------------------
 
         return res.status(200).json({
             message: "Transactions fetched successfully",
-            count: transactions.length,
-            transactions
+
+            transactions,
+
+            pagination: {
+                currentPage: pageNumber,
+                limit: limitNumber,
+                totalTransactions,
+                totalPages
+            }
         });
 
     } catch (err) {
@@ -93,9 +207,21 @@ const getTransactions = async (req, res) => {
     }
 };
 
+
+// ===============================
+// GET TRANSACTION BY ID
+// ===============================
+
 const getTransactionById = async (req, res) => {
     try {
-        const id = req.params.id;
+        const { id } = req.params;
+
+        // Validate MongoDB ObjectId
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                message: "Invalid transaction ID"
+            });
+        }
 
         const transaction = await transactionModel.findOne({
             _id: id,
@@ -123,9 +249,20 @@ const getTransactionById = async (req, res) => {
 };
 
 
+// ===============================
+// UPDATE TRANSACTION
+// ===============================
+
 const updateTransaction = async (req, res) => {
     try {
-        const id = req.params.id;
+        const { id } = req.params;
+
+        // Validate MongoDB ObjectId
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                message: "Invalid transaction ID"
+            });
+        }
 
         const {
             amount,
@@ -134,22 +271,30 @@ const updateTransaction = async (req, res) => {
             category
         } = req.body;
 
-        const transaction = await transactionModel.findOneAndUpdate(
-            {
-                _id: id,
-                user: req.user.id
-            },
-            {
-                amount,
-                type,
-                paymentMethod,
-                category
-            },
-            {
-                new: true,
-                runValidators: true
-            }
-        );
+        // PUT → require all fields
+        if (!amount || !type || !paymentMethod || !category) {
+            return res.status(400).json({
+                message: "Please provide every detail"
+            });
+        }
+
+        const transaction =
+            await transactionModel.findOneAndUpdate(
+                {
+                    _id: id,
+                    user: req.user.id
+                },
+                {
+                    amount,
+                    type,
+                    paymentMethod,
+                    category
+                },
+                {
+                    new: true,
+                    runValidators: true
+                }
+            );
 
         if (!transaction) {
             return res.status(404).json({
@@ -172,14 +317,26 @@ const updateTransaction = async (req, res) => {
 };
 
 
+// ===============================
+// DELETE TRANSACTION
+// ===============================
+
 const deleteTransaction = async (req, res) => {
     try {
-        const id = req.params.id;
+        const { id } = req.params;
 
-        const transaction = await transactionModel.findOneAndDelete({
-            _id: id,
-            user: req.user.id
-        });
+        // Validate MongoDB ObjectId
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                message: "Invalid transaction ID"
+            });
+        }
+
+        const transaction =
+            await transactionModel.findOneAndDelete({
+                _id: id,
+                user: req.user.id
+            });
 
         if (!transaction) {
             return res.status(404).json({
@@ -200,6 +357,11 @@ const deleteTransaction = async (req, res) => {
         });
     }
 };
+
+
+// ===============================
+// EXPORT
+// ===============================
 
 export {
     createTransaction,
